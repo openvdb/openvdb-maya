@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
+// Copyright (c) DreamWorks Animation LLC
 //
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
@@ -28,20 +28,21 @@
 //
 ///////////////////////////////////////////////////////////////////////////
 
+/// @file OpenVDBTransformNode.cc
 /// @author FX R&D OpenVDB team
 
 #include "OpenVDBPlugin.h"
 #include <openvdb_maya/OpenVDBData.h>
 #include <openvdb_maya/OpenVDBUtil.h>
 
-#include <openvdb/tools/Filter.h>
-
 #include <maya/MFnTypedAttribute.h>
 #include <maya/MFnStringData.h>
 #include <maya/MFnPluginData.h>
 #include <maya/MGlobal.h>
-#include <maya/MFnEnumAttribute.h>
 #include <maya/MFnNumericAttribute.h>
+#include <maya/MFloatVector.h>
+
+#include <boost/math/constants/constants.hpp> // boost::math::constants::pi
 
 
 namespace mvdb = openvdb_maya;
@@ -50,10 +51,10 @@ namespace mvdb = openvdb_maya;
 ////////////////////////////////////////
 
 
-struct OpenVDBFilterNode : public MPxNode
+struct OpenVDBTransformNode : public MPxNode
 {
-    OpenVDBFilterNode() {}
-    virtual ~OpenVDBFilterNode() {}
+    OpenVDBTransformNode() {}
+    virtual ~OpenVDBTransformNode() {}
 
     virtual MStatus compute(const MPlug& plug, MDataBlock& data);
 
@@ -64,39 +65,43 @@ struct OpenVDBFilterNode : public MPxNode
     static MObject aVdbInput;
     static MObject aVdbOutput;
     static MObject aVdbSelectedGridNames;
-    static MObject aFilter;
-    static MObject aRadius;
-    static MObject aOffset;
-    static MObject aIterations;
+    static MObject aTranslate;
+    static MObject aRotate;
+    static MObject aScale;
+    static MObject aPivot;
+    static MObject aUniformScale;
+    static MObject aInvert;
 };
 
 
-MTypeId OpenVDBFilterNode::id(0x00108A56);
-MObject OpenVDBFilterNode::aVdbOutput;
-MObject OpenVDBFilterNode::aVdbInput;
-MObject OpenVDBFilterNode::aVdbSelectedGridNames;
-MObject OpenVDBFilterNode::aFilter;
-MObject OpenVDBFilterNode::aRadius;
-MObject OpenVDBFilterNode::aOffset;
-MObject OpenVDBFilterNode::aIterations;
+MTypeId OpenVDBTransformNode::id(0x00108A57);
+MObject OpenVDBTransformNode::aVdbOutput;
+MObject OpenVDBTransformNode::aVdbInput;
+MObject OpenVDBTransformNode::aVdbSelectedGridNames;
+MObject OpenVDBTransformNode::aTranslate;
+MObject OpenVDBTransformNode::aRotate;
+MObject OpenVDBTransformNode::aScale;
+MObject OpenVDBTransformNode::aPivot;
+MObject OpenVDBTransformNode::aUniformScale;
+MObject OpenVDBTransformNode::aInvert;
 
 
 namespace {
-    mvdb::NodeRegistry registerNode("OpenVDBFilter", OpenVDBFilterNode::id,
-        OpenVDBFilterNode::creator, OpenVDBFilterNode::initialize);
+    mvdb::NodeRegistry registerNode("OpenVDBTransform", OpenVDBTransformNode::id,
+        OpenVDBTransformNode::creator, OpenVDBTransformNode::initialize);
 }
 
 
 ////////////////////////////////////////
 
 
-void* OpenVDBFilterNode::creator()
+void* OpenVDBTransformNode::creator()
 {
-    return new OpenVDBFilterNode();
+    return new OpenVDBTransformNode();
 }
 
 
-MStatus OpenVDBFilterNode::initialize()
+MStatus OpenVDBTransformNode::initialize()
 {
     MStatus stat;
 
@@ -113,47 +118,44 @@ MStatus OpenVDBFilterNode::initialize()
     if (stat != MS::kSuccess) return stat;
 
 
-    MFnEnumAttribute eAttr;
-	aFilter = eAttr.create("Filter", "filter", 0, &stat);
-    if (stat != MS::kSuccess) return stat;
-
-	eAttr.addField("Mean", 0);
-	eAttr.addField("Gauss", 1);
-	eAttr.addField("Median", 2);
-	eAttr.addField("Offset", 3);
-
-    eAttr.setConnectable(false);
-    stat = addAttribute(aFilter);
-    if (stat != MS::kSuccess) return stat;
-
-
     MFnNumericAttribute nAttr;
 
-    aRadius = nAttr.create("FilterVoxelRadius", "r", MFnNumericData::kInt);
-    nAttr.setDefault(1);
-    nAttr.setMin(1);
-    nAttr.setSoftMin(1);
-    nAttr.setSoftMax(5);
-
-    stat = addAttribute(aRadius);
+    aTranslate = nAttr.createPoint("Translate", "t", &stat);
+    if (stat != MS::kSuccess) return stat;
+    nAttr.setDefault(0.0, 0.0, 0.0);
+    stat = addAttribute(aTranslate);
     if (stat != MS::kSuccess) return stat;
 
-    aIterations = nAttr.create("Iterations", "it", MFnNumericData::kInt);
-    nAttr.setDefault(1);
-    nAttr.setMin(1);
-    nAttr.setSoftMin(1);
-    nAttr.setSoftMax(10);
+    aRotate = nAttr.createPoint("Rotate", "r", &stat);
+    if (stat != MS::kSuccess) return stat;
+    nAttr.setDefault(0.0, 0.0, 0.0);
+    stat = addAttribute(aRotate);
+    if (stat != MS::kSuccess) return stat;
 
-    stat = addAttribute(aIterations);
+    aScale = nAttr.createPoint("Scale", "s", &stat);
+    if (stat != MS::kSuccess) return stat;
+    nAttr.setDefault(1.0, 1.0, 1.0);
+    stat = addAttribute(aScale);
+    if (stat != MS::kSuccess) return stat;
+
+    aPivot = nAttr.createPoint("Pivot", "p", &stat);
+    if (stat != MS::kSuccess) return stat;
+    nAttr.setDefault(0.0, 0.0, 0.0);
+    stat = addAttribute(aPivot);
+    if (stat != MS::kSuccess) return stat;
+
+    aUniformScale = nAttr.create("UniformScale", "us", MFnNumericData::kFloat);
+    nAttr.setDefault(1.0);
+    nAttr.setMin(1e-7);
+    nAttr.setSoftMax(10.0);
+
+    stat = addAttribute(aUniformScale);
     if (stat != MS::kSuccess) return stat;
 
 
-    aOffset = nAttr.create("Offset", "o", MFnNumericData::kFloat);
-    nAttr.setDefault(0.0);
-    nAttr.setSoftMin(-1.0);
-    nAttr.setSoftMax(1.0);
-
-    stat = addAttribute(aOffset);
+    aInvert = nAttr.create("invert", "InvertTransformation", MFnNumericData::kBoolean);
+    nAttr.setDefault(false);
+    stat = addAttribute(aInvert);
     if (stat != MS::kSuccess) return stat;
 
 
@@ -181,19 +183,25 @@ MStatus OpenVDBFilterNode::initialize()
     stat = attributeAffects(aVdbInput, aVdbOutput);
     if (stat != MS::kSuccess) return stat;
 
-    stat = attributeAffects(aFilter, aVdbOutput);
-    if (stat != MS::kSuccess) return stat;
-
     stat = attributeAffects(aVdbSelectedGridNames, aVdbOutput);
     if (stat != MS::kSuccess) return stat;
 
-    stat = attributeAffects(aRadius, aVdbOutput);
+    stat = attributeAffects(aTranslate, aVdbOutput);
     if (stat != MS::kSuccess) return stat;
 
-    stat = attributeAffects(aOffset, aVdbOutput);
+    stat = attributeAffects(aRotate, aVdbOutput);
     if (stat != MS::kSuccess) return stat;
 
-    stat = attributeAffects(aIterations, aVdbOutput);
+    stat = attributeAffects(aScale, aVdbOutput);
+    if (stat != MS::kSuccess) return stat;
+
+    stat = attributeAffects(aPivot, aVdbOutput);
+    if (stat != MS::kSuccess) return stat;
+
+    stat = attributeAffects(aUniformScale, aVdbOutput);
+    if (stat != MS::kSuccess) return stat;
+
+    stat = attributeAffects(aInvert, aVdbOutput);
     if (stat != MS::kSuccess) return stat;
 
     return MS::kSuccess;
@@ -202,37 +210,8 @@ MStatus OpenVDBFilterNode::initialize()
 
 ////////////////////////////////////////
 
-namespace internal {
 
-template <typename GridT>
-void filterGrid(openvdb::GridBase& grid, int operation, int radius, int iterations, float offset = 0.0)
-{
-    GridT& gridRef = static_cast<GridT&>(grid);
-
-    openvdb::tools::Filter<GridT> filter(gridRef);
-
-    switch (operation) {
-    case 0:
-        filter.mean(radius, iterations);
-        break;
-    case 1:
-        filter.gaussian(radius, iterations);
-        break;
-    case 2:
-        filter.median(radius, iterations);
-        break;
-    case 3:
-        filter.offset(typename GridT::ValueType(offset));
-        break;
-    }
-}
-
-}; // namespace internal
-
-////////////////////////////////////////
-
-
-MStatus OpenVDBFilterNode::compute(const MPlug& plug, MDataBlock& data)
+MStatus OpenVDBTransformNode::compute(const MPlug& plug, MDataBlock& data)
 {
 
     if (plug == aVdbOutput) {
@@ -252,14 +231,38 @@ MStatus OpenVDBFilterNode::compute(const MPlug& plug, MDataBlock& data)
 
         if (inputVdb && outputVdb) {
 
+            const MFloatVector t = data.inputValue(aTranslate, &status).asFloatVector();
+            const MFloatVector r = data.inputValue(aRotate, &status).asFloatVector();
+            const MFloatVector p = data.inputValue(aPivot, &status).asFloatVector();
+            const MFloatVector s = data.inputValue(aScale, &status).asFloatVector() *
+                  data.inputValue(aUniformScale, &status).asFloat();
 
-            const int operation = data.inputValue(aFilter, &status).asInt();
-            const int radius = data.inputValue(aRadius, &status).asInt();
-            const int iterations = data.inputValue(aIterations, &status).asInt();
-            const float offset = data.inputValue(aOffset, &status).asFloat();
+            // Construct new transform
+
+            openvdb::Mat4R mat(openvdb::Mat4R::identity());
+
+            mat.preTranslate(openvdb::Vec3R(p[0], p[1], p[2]));
+
+            const double deg2rad = boost::math::constants::pi<double>() / 180.0;
+            mat.preRotate(openvdb::math::X_AXIS, deg2rad*r[0]);
+            mat.preRotate(openvdb::math::Y_AXIS, deg2rad*r[1]);
+            mat.preRotate(openvdb::math::Z_AXIS, deg2rad*r[2]);
+
+            mat.preScale(openvdb::Vec3R(s[0], s[1], s[2]));
+            mat.preTranslate(openvdb::Vec3R(-p[0], -p[1], -p[2]));
+            mat.preTranslate(openvdb::Vec3R(t[0], t[1], t[2]));
+
+            typedef openvdb::math::AffineMap AffineMap;
+            typedef openvdb::math::Transform Transform;
+
+            if (data.inputValue(aInvert, &status).asBool()) {
+                mat = mat.inverse();
+            }
+
+            AffineMap map(mat);
+
             const std::string selectionStr =
                 data.inputValue(aVdbSelectedGridNames, &status).asString().asChar();
-
 
             mvdb::GridCPtrVec grids;
             if (!mvdb::getSelectedGrids(grids, selectionStr, *inputVdb, *outputVdb)) {
@@ -268,21 +271,17 @@ MStatus OpenVDBFilterNode::compute(const MPlug& plug, MDataBlock& data)
 
             for (mvdb::GridCPtrVecIter it = grids.begin(); it != grids.end(); ++it) {
 
-                const openvdb::GridBase& gridRef = **it;
+                openvdb::GridBase::ConstPtr grid = (*it)->copyGrid(); // shallow copy, shares tree
 
-                if (gridRef.type() == openvdb::FloatGrid::gridType()) {
-                    openvdb::GridBase::Ptr grid = gridRef.deepCopyGrid(); // modifiable copy
-                    internal::filterGrid<openvdb::FloatGrid>(*grid, operation, radius, iterations, offset);
-                    outputVdb->insert(grid);
-                } else if (gridRef.type() == openvdb::DoubleGrid::gridType()) {
-                    openvdb::GridBase::Ptr grid = gridRef.deepCopyGrid(); // modifiable copy
-                    internal::filterGrid<openvdb::DoubleGrid>(*grid, operation, radius, iterations, offset);
-                    outputVdb->insert(grid);
-                } else {
-                    const std::string msg = "Skipped '" + gridRef.getName() + "', unsupported type.";
-                    MGlobal::displayWarning(msg.c_str());
-                    outputVdb->insert(gridRef);
-                }
+                // Merge the transform's current affine representation with the new affine map.
+                AffineMap::Ptr compound(
+                    new AffineMap(*grid->transform().baseMap()->getAffineMap(), map));
+
+                // Simplify the affine map and replace the transform.
+                openvdb::ConstPtrCast<openvdb::GridBase>(grid)->setTransform(
+                    Transform::Ptr(new Transform(openvdb::math::simplify(compound))));
+
+                outputVdb->insert(grid);
             }
 
             MDataHandle output = data.outputValue(aVdbOutput);
@@ -295,6 +294,6 @@ MStatus OpenVDBFilterNode::compute(const MPlug& plug, MDataBlock& data)
     return MS::kUnknownParameter;
 }
 
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
+// Copyright (c) DreamWorks Animation LLC
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

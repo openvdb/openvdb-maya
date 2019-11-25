@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
+// Copyright (c) DreamWorks Animation LLC
 //
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
@@ -929,7 +929,7 @@ public:
         unsigned voxelCount = 0;
         for (size_t l = 0, L = leafs.leafCount(); l < L; ++l) {
             indexMap[l] = voxelCount;
-            voxelCount += std::min(leafs.leaf(l).onVoxelCount(), voxelsPerLeaf);
+            voxelCount += std::min(static_cast<size_t>(leafs.leaf(l).onVoxelCount()), voxelsPerLeaf);
         }
 
         std::vector<GLfloat>
@@ -1082,6 +1082,6 @@ processTypedVectorGrid(GridPtrType grid, OpType& op)
 
 #endif // OPENVDB_MAYA_UTIL_HAS_BEEN_INCLUDED
 
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
+// Copyright (c) DreamWorks Animation LLC
 // All rights reserved. This software is distributed under the
 // Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
